@@ -1,6 +1,6 @@
-#vtt2lrc
+# vtt2lrc
 convert vtt to lrc
 
-#credit
-##subtitle-to-lrc.exe
+# credit
+## subtitle-to-lrc.exe
 shipurjan/subtitle-to-lrc
