@@ -1,176 +1,231 @@
 #!/usr/bin/env bash
-# frp.sh - 安装/管理/卸载 frp (frps/frpc)
-# 兼容 Debian 系列 (systemd) 与 OpenWrt (/etc/init.d)
-# 目标: 下载 fatedier/frp 最新 linux_amd64 release 并安装
-# Author: ChatGPT (adapted)
-set -e
+# frp.sh - 安装/升级/管理/卸载 frp（带严格 /etc/frp 仅含两个 toml 的安装策略）
+# 兼容 Debian(systemd) 与 OpenWrt(/etc/init.d)
+set -euo pipefail
+IFS=$'\n\t'
 
 PROG_NAME="frp.sh"
-TMPDIR=""
-GITHUB_API="https://api.github.com/repos/fatedier/frp/releases/latest"
 ARCH_WANTED="linux_amd64"
+GITHUB_API="https://api.github.com/repos/fatedier/frp/releases/latest"
 BIN_DEST="/usr/bin"
 ETC_DIR="/etc/frp"
 SYSTEM=""
-SELF_PATH="$0"
+DOWNLOADER=""
+TMPDIR=""
 
-# Helper: print
-echoinfo(){ echo -e "\033[1;34m[INFO]\033[0m $*"; }
-echowarn(){ echo -e "\033[1;33m[WARN]\033[0m $*"; }
-echoerr(){ echo -e "\033[1;31m[ERROR]\033[0m $*" >&2; }
+# 颜色
+c_reset="\033[0m"
+c_info="\033[1;34m"
+c_warn="\033[1;33m"
+c_err="\033[1;31m"
+c_prompt="\033[1;32m"
 
-# Cleanup tmp on exit
-cleanup() {
-  [ -n "$TMPDIR" ] && [ -d "$TMPDIR" ] && rm -rf "$TMPDIR"
-}
+echoinfo(){ printf "%b[INFO]%b %s\n" "$c_info" "$c_reset" "$*"; }
+echowarn(){ printf "%b[WARN]%b %s\n" "$c_warn" "$c_reset" "$*"; }
+echoerr(){ printf "%b[ERROR]%b %s\n" "$c_err" "$c_reset" "$*" >&2; }
+
+cleanup(){ [ -n "${TMPDIR:-}" ] && [ -d "$TMPDIR" ] && rm -rf "$TMPDIR" || true; }
 trap cleanup EXIT
 
-# 检测系统类型（debian/systemd 或 openwrt）
+################################
+# 基本检测与版本函数（与之前版本相同）
+################################
 detect_system(){
-  echoinfo "检测系统类型..."
-  if [ -f /etc/openwrt_release ] || grep -qi "OpenWrt" /etc/os-release 2>/dev/null; then
+  if [ -f /etc/openwrt_release ] || ( [ -f /etc/os-release ] && grep -qi "openwrt" /etc/os-release ); then
     SYSTEM="openwrt"
-  elif command -v systemctl >/dev/null 2>&1 && [ -f /etc/debian_version ] || grep -qi "debian\|ubuntu" /etc/os-release 2>/dev/null; then
+  elif command -v systemctl >/dev/null 2>&1 && ( [ -f /etc/debian_version ] || ( [ -f /etc/os-release ] && grep -qiE "debian|ubuntu" /etc/os-release ) ); then
     SYSTEM="debian"
   else
-    # 尝试通过包管理器判断
-    if command -v opkg >/dev/null 2>&1; then
-      SYSTEM="openwrt"
-    elif command -v apt-get >/dev/null 2>&1 || command -v dpkg >/dev/null 2>&1; then
-      SYSTEM="debian"
+    if command -v opkg >/dev/null 2>&1; then SYSTEM="openwrt"
+    elif command -v apt-get >/dev/null 2>&1 || command -v dpkg >/dev/null 2>&1; then SYSTEM="debian"
     else
-      # 让用户选择
-      echowarn "无法自动识别系统类型，请手动选择："
-      select choice in "debian" "openwrt" "退出"; do
-        case $choice in
-          debian) SYSTEM="debian"; break;;
-          openwrt) SYSTEM="openwrt"; break;;
-          "退出") exit 1;;
+      while true; do
+        clear
+        echo "无法自动识别系统，请选择："
+        echo "  1) debian/ubuntu (systemd)"
+        echo "  2) openwrt"
+        echo "  0) 退出"
+        read -rp $'\n请选择: ' choice
+        case "$choice" in
+          1) SYSTEM="debian"; break;;
+          2) SYSTEM="openwrt"; break;;
+          0) exit 1;;
+          *) echowarn "无效选择"; sleep 1;;
         esac
       done
     fi
   fi
-  echoinfo "检测到系统类型: $SYSTEM"
+  echoinfo "检测到系统: $SYSTEM"
 }
 
-# 检查基础工具 (curl/wget/tar)
 check_tools(){
-  echoinfo "检查必要工具..."
-  if command -v curl >/dev/null 2>&1; then
-    DOWNLOADER="curl"
-  elif command -v wget >/dev/null 2>&1; then
-    DOWNLOADER="wget"
-  else
-    echoerr "未找到 curl 或 wget，请先安装其中一个。"
-    exit 1
-  fi
-  if ! command -v tar >/dev/null 2>&1; then
-    echoerr "未找到 tar，请先安装 tar。"
-    exit 1
-  fi
-  echoinfo "使用下载器: $DOWNLOADER"
+  if command -v curl >/dev/null 2>&1; then DOWNLOADER="curl"
+  elif command -v wget >/dev/null 2>&1; then DOWNLOADER="wget"
+  else echoerr "未找到 curl 或 wget，请先安装。"; exit 1; fi
+  if ! command -v tar >/dev/null 2>&1; then echoerr "未找到 tar，请先安装。"; exit 1; fi
 }
 
-# 从 GitHub API 获取最新 release 中的 linux_amd64 资产下载地址
-get_latest_asset_url(){
-  echoinfo "从 GitHub 获取最新 release 信息..."
-  if [ "$DOWNLOADER" = "curl" ]; then
-    json=$(curl -sL "$GITHUB_API")
-  else
-    json=$(wget -qO- "$GITHUB_API")
+arch_check(){
+  arch=$(uname -m || echo unknown)
+  echoinfo "检测到架构: $arch"
+  if [ "$arch" != "x86_64" ] && [ "$arch" != "amd64" ]; then
+    echowarn "当前不是 x86_64 架构，本脚本将下载 linux_amd64 版本，可能无法执行。"
+    read -rp $'\n继续吗？(yes/ no): ' goon
+    if [ "$goon" != "yes" ]; then echoinfo "操作已取消"; exit 1; fi
   fi
+}
 
-  # 尝试提取名包含 linux_amd64 且以 .tar.gz 结尾的 browser_download_url（不依赖 jq）
+get_latest_release_info(){
+  echoinfo "查询 GitHub latest release..."
+  if [ "$DOWNLOADER" = "curl" ]; then json=$(curl -fsSL "$GITHUB_API"); else json=$(wget -qO- "$GITHUB_API"); fi
+  tag=$(echo "$json" | grep -Eo '"tag_name":[^,]+' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/' | head -n1 || true)
+  if [ -n "${tag:-}" ]; then LATEST_TAG="$tag"; LATEST_VERSION=$(echo "$tag" | sed -E 's/^[vV]//'); else LATEST_TAG=""; LATEST_VERSION=""; fi
   asset_url=$(echo "$json" | grep -Eo '"browser_download_url":[^,]+' \
-              | sed -E 's/.*"browser_download_url": *"([^"]+)".*/\1/' \
-              | grep "$ARCH_WANTED" | grep -E "\.tar\.gz$" | head -n1 || true)
-
-  if [ -z "$asset_url" ]; then
-    echoerr "未能从 GitHub API 获取到 $ARCH_WANTED 的下载地址，请检查网络或 GitHub API 限制。"
-    exit 1
-  fi
-  echoinfo "找到最新资产: $asset_url"
+    | sed -E 's/.*"browser_download_url": *"([^"]+)".*/\1/' \
+    | grep "$ARCH_WANTED" | grep -E "\.tar\.gz$" | head -n1 || true)
+  ASSET_URL="$asset_url"
+  echoinfo "Latest release: ${LATEST_TAG:-unknown}, asset: ${ASSET_URL:-(none)}"
 }
 
-# 下载并解压
+get_installed_version(){
+  binpath="$1"
+  ver="unknown"
+  if [ ! -x "$binpath" ]; then echo "$ver"; return; fi
+  out=$("$binpath" -v 2>&1 || true)
+  if [ -z "$out" ]; then out=$("$binpath" -V 2>&1 || true); fi
+  if [ -z "$out" ]; then out=$("$binpath" --version 2>&1 || true); fi
+  vernum=$(echo "$out" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)
+  if [ -n "$vernum" ]; then ver="$vernum"; fi
+  echo "$ver"
+}
+
+ver_gt(){
+  a="$1"; b="$2"
+  if [ -z "$a" ] || [ -z "$b" ] || [ "$a" = "unknown" ] || [ "$b" = "unknown" ]; then return 1; fi
+  IFS='.' read -r -a A <<< "$a"
+  IFS='.' read -r -a B <<< "$b"
+  for i in 0 1 2; do
+    ai=${A[i]:-0}; bi=${B[i]:-0}
+    if ((10#$ai > 10#$bi)); then return 0; fi
+    if ((10#$ai < 10#$bi)); then return 1; fi
+  done
+  return 1
+}
+
+#####################################
+# 下载/解压/安装（严格处理 /etc/frp）
+#####################################
 download_and_extract(){
   TMPDIR=$(mktemp -d)
   cd "$TMPDIR"
-  echoinfo "下载到临时目录: $TMPDIR"
-  archive_name="${asset_url##*/}"
-  echoinfo "开始下载 $archive_name ..."
-  if [ "$DOWNLOADER" = "curl" ]; then
-    curl -L -o "$archive_name" "$asset_url"
-  else
-    wget -q -O "$archive_name" "$asset_url"
-  fi
-  echoinfo "下载完成，开始解压..."
-  mkdir -p frp_extracted
-  tar -xzf "$archive_name" -C frp_extracted
-  # 解压通常会创建形如 frp_0.xx_linux_amd64 目录
-  extracted_dir=$(find frp_extracted -maxdepth 1 -type d ! -path frp_extracted | head -n1)
-  if [ -z "$extracted_dir" ]; then
-    # 也可能是直接在当前目录
-    extracted_dir=$(find frp_extracted -type d | head -n1)
-  fi
-  if [ -z "$extracted_dir" ]; then
-    echoerr "解压失败或未找到解压目录。"
-    exit 1
-  fi
+  archive_name="${ASSET_URL##*/}"
+  echoinfo "下载 $archive_name 到 $TMPDIR ..."
+  if [ "$DOWNLOADER" = "curl" ]; then curl -L -o "$archive_name" "$ASSET_URL"
+  else wget -q -O "$archive_name" "$ASSET_URL"; fi
+  echoinfo "解压..."
+  mkdir -p extracted
+  tar -xzf "$archive_name" -C extracted
+  extracted_dir=$(find extracted -maxdepth 1 -type d ! -path extracted | head -n1 || true)
+  if [ -z "$extracted_dir" ]; then extracted_dir=$(find extracted -type d | head -n1 || true); fi
+  if [ -z "$extracted_dir" ]; then echoerr "解压失败"; exit 1; fi
   echoinfo "解压目录: $extracted_dir"
 }
 
-# 将 frpc、frps 移动至 /usr/bin 并处理配置文件
-install_binaries_and_configs(){
-  echoinfo "安装二进制文件和配置..."
+# 仅替换/安装二进制（升级时使用），不触及 /etc/frp
+install_bins_only_from_extracted(){
   mkdir -p "$BIN_DEST"
-  # 在解压目录中搜索 frpc 和 frps
-  frp_bin_frpc=$(find "$extracted_dir" -type f -name frpc -print -quit || true)
-  frp_bin_frps=$(find "$extracted_dir" -type f -name frps -print -quit || true)
+  frpc_src=$(find "$extracted_dir" -type f -name frpc -print -quit || true)
+  frps_src=$(find "$extracted_dir" -type f -name frps -print -quit || true)
 
-  if [ -n "$frp_bin_frpc" ]; then
-    cp -f "$frp_bin_frpc" "$BIN_DEST/"
-    chmod +x "$BIN_DEST/frpc"
-    echoinfo "已安装 frpc -> $BIN_DEST/frpc"
-  else
-    echowarn "未找到 frpc 二进制，跳过。" 
-  fi
-  if [ -n "$frp_bin_frps" ]; then
-    cp -f "$frp_bin_frps" "$BIN_DEST/"
-    chmod +x "$BIN_DEST/frps"
-    echoinfo "已安装 frps -> $BIN_DEST/frps"
-  else
-    echowarn "未找到 frps 二进制，跳过。"
-  fi
+  if [ -n "$frpc_src" ]; then
+    install -m 0755 "$frpc_src" "$BIN_DEST/frpc"
+    echoinfo "frpc 已写入 $BIN_DEST/frpc"
+  else echowarn "未在 release 中找到 frpc"; fi
 
-  # 处理配置：把目录下的 *.ini, *.toml, frpc.ini, frps.ini 移到 /etc/frp
-  mkdir -p "$ETC_DIR"
-  # 兼容不同文件名
-  shopt -s nullglob 2>/dev/null || true
-  for cfg in $(find "$extracted_dir" -maxdepth 2 -type f \( -name "*.toml" -o -name "*.ini" -o -name "frps*" -o -name "frpc*" \) -print); do
-    # 只移动文件且不覆盖用户已有配置（若不存在则移动）
-    base="$(basename "$cfg")"
-    if [ ! -f "$ETC_DIR/$base" ]; then
-      cp -f "$cfg" "$ETC_DIR/$base"
-      echoinfo "已安装配置样例 -> $ETC_DIR/$base"
-    else
-      echowarn "$ETC_DIR/$base 已存在，保留原文件。"
-    fi
-  done
-  echoinfo "清理下载文件..."
-  # 删除 archive 和解压目录
-  rm -f "$TMPDIR/$archive_name" || true
+  if [ -n "$frps_src" ]; then
+    install -m 0755 "$frps_src" "$BIN_DEST/frps"
+    echoinfo "frps 已写入 $BIN_DEST/frps"
+  else echowarn "未在 release 中找到 frps"; fi
 }
 
-# 创建 systemd unit 文件
-create_systemd_units(){
-  echoinfo "创建 systemd 服务单元..."
-  # frps.service
+# 完整安装流程：会确保 /etc/frp 目录 **仅** 包含 frps.toml 和 frpc.toml（先备份旧目录）
+install_full_flow_from_extracted(){
+  mkdir -p "$BIN_DEST"
+
+  frpc_src=$(find "$extracted_dir" -type f -name frpc -print -quit || true)
+  frps_src=$(find "$extracted_dir" -type f -name frps -print -quit || true)
+
+  if [ -n "$frpc_src" ]; then
+    install -m 0755 "$frpc_src" "$BIN_DEST/frpc"
+    echoinfo "frpc 安装到 $BIN_DEST/frpc"
+  else
+    echowarn "未找到 frpc 二进制"
+  fi
+
+  if [ -n "$frps_src" ]; then
+    install -m 0755 "$frps_src" "$BIN_DEST/frps"
+    echoinfo "frps 安装到 $BIN_DEST/frps"
+  else
+    echowarn "未找到 frps 二进制"
+  fi
+
+  # 现在处理 /etc/frp：必须保证最终只有 frpc.toml 和 frps.toml
+  if [ -d "$ETC_DIR" ] && [ "$(ls -A "$ETC_DIR" 2>/dev/null || true)" != "" ]; then
+    backup="/etc/frp.bak.$(date +%Y%m%d%H%M%S)"
+    echowarn "/etc/frp 已存在且非空，先备份到 $backup"
+    mv "$ETC_DIR" "$backup"
+  fi
+
+  mkdir -p "$ETC_DIR"
+
+  # 尝试找到示例 toml 并移动/复制到 /etc/frp
+  frpc_toml_src=$(find "$extracted_dir" -type f -iname "frpc.toml" -print -quit || true)
+  frps_toml_src=$(find "$extracted_dir" -type f -iname "frps.toml" -print -quit || true)
+
+  if [ -n "$frpc_toml_src" ]; then
+    install -m 0644 "$frpc_toml_src" "$ETC_DIR/frpc.toml"
+    echoinfo "已复制示例 frpc.toml -> $ETC_DIR/frpc.toml"
+  else
+    # 创建占位文件，提醒用户补充
+    cat >"$ETC_DIR/frpc.toml" <<'EOF'
+# frpc.toml (占位)
+# 该文件由安装脚本创建，请根据你的需求填写客户端配置
+# 示例:
+# [common]
+# server_addr = "1.2.3.4"
+# server_port = 7000
+EOF
+    chmod 0644 "$ETC_DIR/frpc.toml"
+    echowarn "release 中未包含 frpc.toml，已创建占位文件 $ETC_DIR/frpc.toml，请编辑"
+  fi
+
+  if [ -n "$frps_toml_src" ]; then
+    install -m 0644 "$frps_toml_src" "$ETC_DIR/frps.toml"
+    echoinfo "已复制示例 frps.toml -> $ETC_DIR/frps.toml"
+  else
+    cat >"$ETC_DIR/frps.toml" <<'EOF'
+# frps.toml (占位)
+# 该文件由安装脚本创建，请根据你的需求填写服务端配置
+# 示例:
+# [common]
+# bind_port = 7000
+EOF
+    chmod 0644 "$ETC_DIR/frps.toml"
+    echowarn "release 中未包含 frps.toml，已创建占位文件 $ETC_DIR/frps.toml，请编辑"
+  fi
+
+  # 确保目录中只有这两个 toml（删除其它任何残留）
+  find "$ETC_DIR" -mindepth 1 -maxdepth 1 ! -name 'frpc.toml' ! -name 'frps.toml' -exec rm -rf {} \; || true
+  echoinfo "/etc/frp 现仅包含 frpc.toml 与 frps.toml（已删除其他文件/目录）"
+}
+
+create_systemd_unit_files(){
+  echoinfo "创建 systemd 单元（但不启用/启动）..."
   if [ -x "$BIN_DEST/frps" ]; then
     cat >/etc/systemd/system/frps.service <<'EOF'
 [Unit]
-Description=frp server (frps)
-After=network.target syslog.target
+Description=frp Server (frps)
+After=network.target
 Wants=network.target
 
 [Service]
@@ -178,23 +233,18 @@ Type=simple
 ExecStart=/usr/bin/frps -c /etc/frp/frps.toml
 Restart=on-failure
 RestartSec=3
-StandardOutput=journal
-StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 EOF
-    echoinfo "已创建 /etc/systemd/system/frps.service"
-    systemctl daemon-reload || true
-    systemctl enable --now frps.service || echowarn "启用 frps 服务失败，可能需要手动 systemctl enable --now frps.service"
+    echoinfo "/etc/systemd/system/frps.service 已生成"
   fi
 
-  # frpc.service
   if [ -x "$BIN_DEST/frpc" ]; then
     cat >/etc/systemd/system/frpc.service <<'EOF'
 [Unit]
-Description=frp client (frpc)
-After=network.target syslog.target
+Description=frp Client (frpc)
+After=network.target
 Wants=network.target
 
 [Service]
@@ -202,172 +252,205 @@ Type=simple
 ExecStart=/usr/bin/frpc -c /etc/frp/frpc.toml
 Restart=on-failure
 RestartSec=3
-StandardOutput=journal
-StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 EOF
-    echoinfo "已创建 /etc/systemd/system/frpc.service"
-    systemctl daemon-reload || true
-    systemctl enable --now frpc.service || echowarn "启用 frpc 服务失败，可能需要手动 systemctl enable --now frpc.service"
+    echoinfo "/etc/systemd/system/frpc.service 已生成"
   fi
+  echowarn "systemd 服务文件已创建，但未启用/未启动。请在确认配置后手动启用并启动。"
+  systemctl daemon-reload || true
 }
 
-# 创建 OpenWrt /etc/init.d 脚本
-create_openwrt_inits(){
-  echoinfo "创建 OpenWrt init 脚本 (/etc/init.d/...)..."
-  # frps
+create_openwrt_init_scripts(){
+  echoinfo "创建 OpenWrt init 脚本（但不 enable/start）..."
   if [ -x "$BIN_DEST/frps" ]; then
     cat >/etc/init.d/frps <<'EOF'
 #!/bin/sh /etc/rc.common
-# frps init script for OpenWrt
+# frps for OpenWrt
 START=99
 STOP=10
-USE_PROCD=1
 PROG=/usr/bin/frps
 CONF=/etc/frp/frps.toml
 start() {
   [ -x "$PROG" ] || return 1
-  echo "Starting frps..."
   start-stop-daemon -S -b -x "$PROG" -- -c "$CONF"
 }
 stop() {
-  echo "Stopping frps..."
   start-stop-daemon -K -x "$PROG"
 }
 EOF
-    chmod +x /etc/init.d/frps
-    /etc/init.d/frps enable 2>/dev/null || true
-    /etc/init.d/frps start 2>/dev/null || echowarn "启动 frps 失败"
-    echoinfo "已创建 /etc/init.d/frps"
+    chmod +x /etc/init.d/frps || true
+    echoinfo "/etc/init.d/frps 已生成"
   fi
-
-  # frpc
   if [ -x "$BIN_DEST/frpc" ]; then
     cat >/etc/init.d/frpc <<'EOF'
 #!/bin/sh /etc/rc.common
-# frpc init script for OpenWrt
+# frpc for OpenWrt
 START=99
 STOP=10
-USE_PROCD=1
 PROG=/usr/bin/frpc
 CONF=/etc/frp/frpc.toml
 start() {
   [ -x "$PROG" ] || return 1
-  echo "Starting frpc..."
   start-stop-daemon -S -b -x "$PROG" -- -c "$CONF"
 }
 stop() {
-  echo "Stopping frpc..."
   start-stop-daemon -K -x "$PROG"
 }
 EOF
-    chmod +x /etc/init.d/frpc
-    /etc/init.d/frpc enable 2>/dev/null || true
-    /etc/init.d/frpc start 2>/dev/null || echowarn "启动 frpc 失败"
-    echoinfo "已创建 /etc/init.d/frpc"
+    chmod +x /etc/init.d/frpc || true
+    echoinfo "/etc/init.d/frpc 已生成"
   fi
+  echowarn "OpenWrt init 脚本已创建，但未 enable/start。请在确认配置后手动启用启动。"
 }
 
-# 将当前脚本复制到目标可执行路径并删除原始脚本（若可行）
 deploy_self_and_cleanup(){
-  target=""
-  if [ "$SYSTEM" = "openwrt" ]; then
-    target="/usr/sbin/$PROG_NAME"
-  else
-    target="/usr/local/bin/$PROG_NAME"
-  fi
-  echoinfo "正在将脚本复制到 $target ..."
-  if [ ! -d "$(dirname "$target")" ]; then
-    mkdir -p "$(dirname "$target")"
-  fi
-
-  # 尝试复制当前脚本文件
-  # $SELF_PATH 可能为 "-bash" 等（当通过 curl|sh -s 时），因此尽量尝试几种来源
-  if [ -f "$SELF_PATH" ] && cp -f "$SELF_PATH" "$target"; then
-    chmod +x "$target"
-    echoinfo "脚本已复制到 $target"
-    # 如果原始位于 /root 或为具体路径，尝试删除
-    if [ "$SELF_PATH" != "$target" ] && [ -f "$SELF_PATH" ]; then
-      echoinfo "尝试删除原始脚本 $SELF_PATH"
-      rm -f "$SELF_PATH" || true
-    fi
-  else
-    # 尝试 /root/frp.sh
-    if [ -f "/root/$PROG_NAME" ] && cp -f "/root/$PROG_NAME" "$target"; then
-      chmod +x "$target"
-      echoinfo "已复制 /root/$PROG_NAME -> $target 并尝试删除原始"
-      rm -f "/root/$PROG_NAME" || true
-    else
-      echowarn "未能复制脚本到 $target。请手动将脚本复制到目标目录并 chmod +x。"
-    fi
-  fi
+  if [ "$SYSTEM" = "openwrt" ]; then target="/usr/sbin/$PROG_NAME"; else target="/usr/local/bin/$PROG_NAME"; fi
+  echoinfo "尝试复制脚本到 $target ..."
+  mkdir -p "$(dirname "$target")"
+  if [ -f "$0" ]; then cp -f "$0" "$target" && chmod +x "$target" && echoinfo "脚本已复制到 $target"
+  elif [ -f "/root/$PROG_NAME" ]; then cp -f "/root/$PROG_NAME" "$target" && chmod +x "$target" && rm -f "/root/$PROG_NAME" || true && echoinfo "脚本已复制到 $target (from /root)"
+  else echowarn "无法自动复制脚本到 $target，请手动复制并 chmod +x"; fi
 }
 
-# 管理菜单（frps/frpc: start/stop/restart/status/logs）
-manage_menu(){
-  while true; do
+########################
+# 安装流程控制：包含版本检测/更新提示（复用之前逻辑）
+########################
+install_flow(){
+  clear
+  detect_system
+  check_tools
+  arch_check
+  get_latest_release_info
+
+  have_frps="no"; have_frpc="no"
+  [ -x "$BIN_DEST/frps" ] && have_frps="yes"
+  [ -x "$BIN_DEST/frpc" ] && have_frpc="yes"
+
+  inst_frps_ver="unknown"; inst_frpc_ver="unknown"
+  if [ "$have_frps" = "yes" ]; then inst_frps_ver=$(get_installed_version "$BIN_DEST/frps"); fi
+  if [ "$have_frpc" = "yes" ]; then inst_frpc_ver=$(get_installed_version "$BIN_DEST/frpc"); fi
+
+  echoinfo "本地已安装版本 frps=$inst_frps_ver frpc=$inst_frpc_ver"
+  echoinfo "最新 release: ${LATEST_TAG:-(unknown)} -> 版本号 ${LATEST_VERSION:-(unknown)}"
+
+  should_prompt_update="no"
+  if [ "$have_frps" = "yes" ] && ver_gt "$LATEST_VERSION" "$inst_frps_ver"; then should_prompt_update="yes"; fi
+  if [ "$have_frpc" = "yes" ] && ver_gt "$LATEST_VERSION" "$inst_frpc_ver"; then should_prompt_update="yes"; fi
+
+  if [ "$should_prompt_update" = "yes" ]; then
     echo
-    echo "==== FRP 管理 ===="
-    echo "1) 管理 frps"
-    echo "2) 管理 frpc"
-    echo "0) 返回上级菜单 / 退出"
-    read -p "请选择: " m
-    case "$m" in
-      1) service_manage "frps";;
-      2) service_manage "frpc";;
-      0) break;;
-      *) echowarn "无效输入";;
-    esac
-  done
-}
+    echo "检测到已有安装且存在可用更新："
+    [ "$have_frps" = "yes" ] && echo "  frps: $inst_frps_ver -> $LATEST_VERSION"
+    [ "$have_frpc" = "yes" ] && echo "  frpc: $inst_frpc_ver -> $LATEST_VERSION"
+    read -rp $'\n是否仅更新二进制（不会更改 /etc/frp 下 toml，也不会修改/创建服务文件）？(yes/[no]) ' update_choice
+    if [ "$update_choice" = "yes" ]; then
+      if [ -z "${ASSET_URL:-}" ]; then echoerr "未获取到下载地址，无法更新"; return; fi
+      download_and_extract
+      install_bins_only_from_extracted
+      echoinfo "二进制更新完成。请在确认后重启服务（若有）。"
+      deploy_self_and_cleanup
+      return
+    fi
+  fi
 
-service_manage(){
-  name="$1"
-  while true; do
+  if [ "$have_frps" = "no" ] || [ "$have_frpc" = "no" ]; then
     echo
-    echo "---- 管理 $name ----"
-    echo "1) 启动"
-    echo "2) 停止"
-    echo "3) 重启"
-    echo "4) 查看状态"
-    echo "5) 查看日志 (仅适用于 systemd/journal)"
-    echo "0) 返回"
-    read -p "请选择: " op
-    case "$op" in
-      1)
-        if [ "$SYSTEM" = "debian" ]; then systemctl start "$name".service || echowarn "启动失败"; else /etc/init.d/"$name" start || echowarn "启动失败"; fi;;
-      2)
-        if [ "$SYSTEM" = "debian" ]; then systemctl stop "$name".service || echowarn "停止失败"; else /etc/init.d/"$name" stop || echowarn "停止失败"; fi;;
-      3)
-        if [ "$SYSTEM" = "debian" ]; then systemctl restart "$name".service || echowarn "重启失败"; else /etc/init.d/"$name" restart || echowarn "重启失败"; fi;;
-      4)
-        if [ "$SYSTEM" = "debian" ]; then systemctl status "$name".service --no-pager || true; else ps aux | grep "$name" | grep -v grep || echo "未检测到进程"; fi;;
-      5)
-        if [ "$SYSTEM" = "debian" ]; then journalctl -u "$name".service -n 200 --no-pager || true; else
-          # OpenWrt: 若存在 /var/log/<name>.log 显示，否则提示
-          if [ -f "/var/log/$name.log" ]; then tail -n 200 /var/log/"$name".log; else
-            echowarn "OpenWrt 上可能没有独立日志文件。请检查 /var/log 或使用 logread。"; logread | tail -n 200
-          fi
-        fi;;
-      0) break;;
-      *) echowarn "无效输入";;
-    esac
-  done
-}
-
-# 卸载操作
-uninstall_all(){
-  echo
-  echowarn "！！将要执行卸载：这会停止并删除 frp 二进制、配置、服务单元以及脚本本体。"
-  read -p "确认卸载并删除所有 frp 文件？(yes/[no]) " confirm
-  if [ "$confirm" != "yes" ]; then
-    echoinfo "已取消卸载。"
+    echo "检测到系统上缺少 frps 或 frpc。将进行完整安装（此操作会备份旧 /etc/frp 并确保新 /etc/frp 仅包含 frpc.toml 与 frps.toml）"
+    read -rp $'\n继续完整安装吗？(yes/[no]) ' cont
+    if [ "$cont" != "yes" ]; then echoinfo "已取消安装"; return; fi
+    if [ -z "${ASSET_URL:-}" ]; then echoerr "未获取到下载地址，无法安装"; return; fi
+    download_and_extract
+    install_full_flow_from_extracted
+    # 创建服务文件（但不启用/启动）
+    if [ "$SYSTEM" = "debian" ]; then create_systemd_unit_files; else create_openwrt_init_scripts; fi
+    deploy_self_and_cleanup
+    echoinfo "完整安装完成。注意：服务未自动启用/启动，请先编辑 /etc/frp/frps.toml 或 /etc/frp/frpc.toml 后再启用启动。"
     return
   fi
 
-  # 停止服务
+  all_up_to_date="yes"
+  if [ "$have_frps" = "yes" ] && ver_gt "$LATEST_VERSION" "$inst_frps_ver"; then all_up_to_date="no"; fi
+  if [ "$have_frpc" = "yes" ] && ver_gt "$LATEST_VERSION" "$inst_frpc_ver"; then all_up_to_date="no"; fi
+
+  if [ "$all_up_to_date" = "yes" ]; then
+    echoinfo "检测到本地 frps/frpc 版本与最新 release 相同或无法检测版本，跳过下载/安装。"
+    echowarn "如需强制重新安装，请先卸载再重新运行安装选项。"
+    return
+  else
+    echo
+    echowarn "存在版本差异或无法确定版本，建议更新二进制。"
+    read -rp $'\n是否下载并替换二进制（不会覆盖 /etc/frp）？(yes/[no]) ' c2
+    if [ "$c2" = "yes" ]; then
+      if [ -z "${ASSET_URL:-}" ]; then echoerr "未获取到下载地址，无法更新"; return; fi
+      download_and_extract
+      install_bins_only_from_extracted
+      echoinfo "二进制替换完成。"
+      deploy_self_and_cleanup
+      return
+    else
+      echoinfo "已取消更新。"
+      return
+    fi
+  fi
+}
+
+####################################
+# 管理菜单/卸载等（保持此前实现）
+####################################
+service_manage(){
+  name="$1"
+  while true; do
+    clear
+    printf "%b FRP 服务管理：%s %b\n" "$c_prompt" "$name" "$c_reset"
+    echo "----------------------------------------"
+    echo "1) 启动"
+    echo "2) 停止"
+    echo "3) 重启"
+    echo "4) 状态"
+    echo "5) 查看日志"
+    echo "0) 返回上级菜单"
+    echo "----------------------------------------"
+    read -rp $'\n请选择: ' op
+    case "$op" in
+      1) if [ "$SYSTEM" = "debian" ]; then systemctl start "${name}.service" || echowarn "启动可能失败"; else /etc/init.d/"$name" start || echowarn "启动可能失败"; fi; sleep 1;;
+      2) if [ "$SYSTEM" = "debian" ]; then systemctl stop "${name}.service" || true; else /etc/init.d/"$name" stop || true; fi; sleep 1;;
+      3) if [ "$SYSTEM" = "debian" ]; then systemctl restart "${name}.service" || echowarn "重启失败"; else /etc/init.d/"$name" restart || echowarn "重启失败"; fi; sleep 1;;
+      4) if [ "$SYSTEM" = "debian" ]; then systemctl status "${name}.service" --no-pager || true; else ps aux | grep "$name" | grep -v grep || echo "未检测到进程"; fi; read -rp $'\n按回车返回...' dum || true;;
+      5) if [ "$SYSTEM" = "debian" ]; then journalctl -u "${name}.service" -n 200 --no-pager || true; else logread | tail -n 200 || true; fi; read -rp $'\n按回车返回...' dum || true;;
+      0) break;;
+      *) echowarn "无效输入"; sleep 1;;
+    esac
+  done
+}
+
+manage_menu(){
+  while true; do
+    clear
+    echo "========================================"
+    printf "%b FRP 管理菜单 %b\n" "$c_prompt" "$c_reset"
+    echo "----------------------------------------"
+    echo "1) 管理 frps (服务端)"
+    echo "2) 管理 frpc (客户端)"
+    echo "0) 返回主菜单"
+    echo "----------------------------------------"
+    read -rp $'\n请选择: ' sel
+    case "$sel" in
+      1) service_manage "frps";;
+      2) service_manage "frpc";;
+      0) break;;
+      *) echowarn "无效输入"; sleep 1;;
+    esac
+  done
+}
+
+uninstall_all(){
+  clear
+  echo "警告：此操作将删除 frp 二进制、配置、服务文件及脚本本体！"
+  read -rp $'\n确认卸载并删除所有 frp 文件？（输入 yes 确认）: ' confirm
+  if [ "$confirm" != "yes" ]; then echoinfo "已取消卸载。"; read -rp $'\n按回车返回...' dum || true; return; fi
+
   if [ "$SYSTEM" = "debian" ]; then
     systemctl stop frps.service 2>/dev/null || true
     systemctl stop frpc.service 2>/dev/null || true
@@ -383,86 +466,37 @@ uninstall_all(){
     rm -f /etc/init.d/frps /etc/init.d/frpc
   fi
 
-  # 删除二进制
-  rm -f "$BIN_DEST/frps" "$BIN_DEST/frpc"
-  # 删除配置目录
-  rm -rf "$ETC_DIR"
-  # 删除可能的日志
-  rm -f /var/log/frps.log /var/log/frpc.log /var/log/frp.log
+  rm -f "$BIN_DEST/frps" "$BIN_DEST/frpc" || true
+  rm -rf "$ETC_DIR" || true
+  rm -f /var/log/frps.log /var/log/frpc.log /var/log/frp.log || true
 
-  # 删除自带脚本
-  if [ "$SYSTEM" = "openwrt" ]; then
-    target="/usr/sbin/$PROG_NAME"
-  else
-    target="/usr/local/bin/$PROG_NAME"
-  fi
-  echoinfo "尝试删除脚本 $target ..."
+  if [ "$SYSTEM" = "openwrt" ]; then target="/usr/sbin/$PROG_NAME"; else target="/usr/local/bin/$PROG_NAME"; fi
   rm -f "$target" || true
-  # 尝试删除 /root 下的拷贝
   rm -f /root/"$PROG_NAME" || true
 
   echoinfo "卸载完成。"
+  read -rp $'\n按回车返回...' dum || true
 }
 
-# 主菜单
 main_menu(){
   while true; do
-    echo
-    echo "====== frp 安装/管理脚本 ======"
-    echo "1) 安装 frp (下载最新 $ARCH_WANTED 并创建服务)"
+    clear
+    printf "%b frp 安装/管理/卸载 脚本 %b\n" "$c_prompt" "$c_reset"
+    echo "----------------------------------------"
+    echo "1) 安装 / 升级 frp"
     echo "2) 管理 frp (启动/停止/重启/日志)"
-    echo "3) 卸载 frp (包括二进制、配置、服务、脚本)"
+    echo "3) 卸载 frp (删除二进制、配置、服务、脚本)"
     echo "0) 退出"
-    read -p "请选择: " opt
+    echo "----------------------------------------"
+    read -rp $'\n请选择: ' opt
     case "$opt" in
-      1)
-        detect_system
-        check_tools
-        get_latest_asset_url
-        download_and_extract
-        install_binaries_and_configs
-        if [ "$SYSTEM" = "debian" ]; then
-          create_systemd_units
-        else
-          create_openwrt_inits
-        fi
-        deploy_self_and_cleanup
-        echoinfo "安装完成。请检查并编辑配置文件位于 $ETC_DIR（例如 frps.toml / frpc.toml）后再启动服务。"
-        ;;
-      2)
-        if [ -z "$SYSTEM" ]; then detect_system; fi
-        manage_menu
-        ;;
-      3)
-        if [ -z "$SYSTEM" ]; then detect_system; fi
-        uninstall_all
-        ;;
+      1) install_flow; read -rp $'\n按回车返回主菜单...' dum || true;;
+      2) if [ -z "${SYSTEM:-}" ]; then detect_system; fi; manage_menu;;
+      3) if [ -z "${SYSTEM:-}" ]; then detect_system; fi; uninstall_all;;
       0) echoinfo "退出"; exit 0;;
-      *) echowarn "无效输入";;
+      *) echowarn "无效选择"; sleep 1;;
     esac
   done
 }
 
-# 自动检测 arch 并提示
-arch_check(){
-  arch=$(uname -m || echo "unknown")
-  echoinfo "检测到机器架构: $arch"
-  if [ "$arch" != "x86_64" ] && [ "$arch" != "amd64" ]; then
-    echowarn "你当前机器并不是 x86_64 (amd64)，但脚本将下载 linux_amd64 构建。该二进制可能无法运行。"
-    read -p "仍要继续下载并安装 linux_amd64 吗？(yes/[no]) " c
-    if [ "$c" != "yes" ]; then
-      echoinfo "取消操作。"
-      exit 1
-    fi
-  fi
-}
-
-# 如果通过直接运行脚本（非交互）也能执行主菜单
-if [ "${BASH_SOURCE[0]}" != "$0" ]; then
-  # 被 source 时不自动运行
-  return 0 2>/dev/null || true
-fi
-
-# 开始
-arch_check
-main_menu
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then main_menu; fi
