@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# frp.sh - 兼容 Debian & OpenWrt 的 frp 安装/升级/管理/卸载脚本（已修复 BusyBox 与无 'install' 情况）
+# frp.sh - 兼容 Debian & OpenWrt 的 frp 安装/升级/管理/卸载脚本
 # 要点：
 # - 直接将解压出的 frps & frpc 写入 /usr/bin 并 chmod 0755（不再使用 install）
 # - /etc/frp 最终只包含 frpc.toml 与 frps.toml（完整安装时重建，不做备份）
