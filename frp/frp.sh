@@ -1,9 +1,8 @@
 #!/bin/sh
-# frp.sh - Debian & OpenWrt 兼容的 frp 安装/管理/卸载 脚本（完整版）
+# frp.sh - Debian & OpenWrt 兼容的 frp 安装/管理/卸载 脚本（优化版）
 # 说明：写 /usr/bin 与 /etc 需要 root 权限。若从 Windows 上传，请先去除 CRLF。
 set -eu
-IFS='
-	'
+IFS='\n\t'
 
 PROG_NAME="frp.sh"
 ARCH_WANTED="linux_amd64"
@@ -155,63 +154,70 @@ ensure_usrbin_writable() {
   return 1
 }
 
-write_bins_to_usrbin() {
+# 将选定的二进制写入 /usr/bin，并在 OpenWrt 下也复制到 /etc/frp 以便使用 ./frps -c ./frps.toml 的运行方式
+install_from_extracted() {
+  sel="$1" # frps, frpc, all
+  ensure_usrbin_writable || return 1
+
   frpc_src=$(find "$extracted_dir" -type f -name frpc 2>/dev/null | head -n1 || true)
   frps_src=$(find "$extracted_dir" -type f -name frps 2>/dev/null | head -n1 || true)
 
-  if [ -n "$frpc_src" ]; then
-    if cp -f "$frpc_src" "$BIN_DEST/frpc" 2>/dev/null; then chmod 0755 "$BIN_DEST/frpc" 2>/dev/null || true; echoinfo "已写入 $BIN_DEST/frpc"; else echoerr "写入 $BIN_DEST/frpc 失败"; return 1; fi
-  else echowarn "未找到 frpc"; fi
+  if [ "$sel" = "frpc" ] || [ "$sel" = "all" ]; then
+    if [ -n "$frpc_src" ]; then
+      if cp -f "$frpc_src" "$BIN_DEST/frpc" 2>/dev/null; then chmod 0755 "$BIN_DEST/frpc" 2>/dev/null || true; echoinfo "已写入 $BIN_DEST/frpc"; else echoerr "写入 $BIN_DEST/frpc 失败"; return 1; fi
+    else
+      echowarn "未找到 frpc 二进制";
+    fi
+  fi
 
-  if [ -n "$frps_src" ]; then
-    if cp -f "$frps_src" "$BIN_DEST/frps" 2>/dev/null; then chmod 0755 "$BIN_DEST/frps" 2>/dev/null || true; echoinfo "已写入 $BIN_DEST/frps"; else echoerr "写入 $BIN_DEST/frps 失败"; return 1; fi
-  else echowarn "未找到 frps"; fi
-  return 0
-}
+  if [ "$sel" = "frps" ] || [ "$sel" = "all" ]; then
+    if [ -n "$frps_src" ]; then
+      if cp -f "$frps_src" "$BIN_DEST/frps" 2>/dev/null; then chmod 0755 "$BIN_DEST/frps" 2>/dev/null || true; echoinfo "已写入 $BIN_DEST/frps"; else echoerr "写入 $BIN_DEST/frps 失败"; return 1; fi
+    else
+      echowarn "未找到 frps 二进制";
+    fi
+  fi
 
-install_bins_only_from_extracted() {
-  ensure_usrbin_writable || return 1
-  write_bins_to_usrbin || return 1
-}
-
-install_full_flow_from_extracted() {
-  ensure_usrbin_writable || return 1
-  write_bins_to_usrbin || return 1
-
-  # 重建 /etc/frp (不备份)，确保目录中仅有两个 toml
+  # 重建 /etc/frp（不备份）并仅保留所选的 toml 文件
   if [ -d "$ETC_DIR" ]; then rm -rf "$ETC_DIR" || true; fi
   mkdir -p "$ETC_DIR" || { echoerr "无法创建 $ETC_DIR"; return 1; }
 
   frpc_toml_src=$(find "$extracted_dir" -type f -iname "frpc.toml" 2>/dev/null | head -n1 || true)
   frps_toml_src=$(find "$extracted_dir" -type f -iname "frps.toml" 2>/dev/null | head -n1 || true)
 
-  if [ -n "$frpc_toml_src" ]; then cp -f "$frpc_toml_src" "$ETC_DIR/frpc.toml" && chmod 0644 "$ETC_DIR/frpc.toml" || true; echoinfo "复制 frpc.toml -> $ETC_DIR/frpc.toml"
-  else
-    cat >"$ETC_DIR/frpc.toml" <<'EOF'
+  if [ "$sel" = "frpc" ] || [ "$sel" = "all" ]; then
+    if [ -n "$frpc_toml_src" ]; then cp -f "$frpc_toml_src" "$ETC_DIR/frpc.toml" && chmod 0644 "$ETC_DIR/frpc.toml" || true; echoinfo "复制 frpc.toml -> $ETC_DIR/frpc.toml"
+    else
+      cat >"$ETC_DIR/frpc.toml" <<'EOF'
 # frpc.toml (占位)
 # 请填写客户端配置
 EOF
-    chmod 0644 "$ETC_DIR/frpc.toml" || true
-    echowarn "未找到示例 frpc.toml，已创建占位 $ETC_DIR/frpc.toml"
+      chmod 0644 "$ETC_DIR/frpc.toml" || true
+      echowarn "未找到示例 frpc.toml，已创建占位 $ETC_DIR/frpc.toml"
+    fi
   fi
 
-  if [ -n "$frps_toml_src" ]; then cp -f "$frps_toml_src" "$ETC_DIR/frps.toml" && chmod 0644 "$ETC_DIR/frps.toml" || true; echoinfo "复制 frps.toml -> $ETC_DIR/frps.toml"
-  else
-    cat >"$ETC_DIR/frps.toml" <<'EOF'
+  if [ "$sel" = "frps" ] || [ "$sel" = "all" ]; then
+    if [ -n "$frps_toml_src" ]; then cp -f "$frps_toml_src" "$ETC_DIR/frps.toml" && chmod 0644 "$ETC_DIR/frps.toml" || true; echoinfo "复制 frps.toml -> $ETC_DIR/frps.toml"
+    else
+      cat >"$ETC_DIR/frps.toml" <<'EOF'
 # frps.toml (占位)
 # 请填写服务端配置
 EOF
-    chmod 0644 "$ETC_DIR/frps.toml" || true
-    echowarn "未找到示例 frps.toml，已创建占位 $ETC_DIR/frps.toml"
+      chmod 0644 "$ETC_DIR/frps.toml" || true
+      echowarn "未找到示例 frps.toml，已创建占位 $ETC_DIR/frps.toml"
+    fi
   fi
 
-  # 删除 /etc/frp 下其它文件，确保只剩 frpc.toml 和 frps.toml
-  for f in "$ETC_DIR"/*; do
-    [ -e "$f" ] || continue
-    bn=$(basename "$f")
-    if [ "$bn" != "frpc.toml" ] && [ "$bn" != "frps.toml" ]; then rm -rf "$f" || true; fi
-  done
-  echoinfo "/etc/frp 已重建并仅包含 frpc.toml 与 frps.toml"
+  # OpenWrt 下：不再复制可执行文件到 /etc/frp，避免浪费路由器空间。init 脚本会直接调用系统 PATH 中的 frps/frpc（或 /usr/bin/frps）并使用 /etc/frp 下的配置文件。
+  if [ "$SYSTEM" = "openwrt" ]; then
+    echoinfo "OpenWrt 环境：不复制二进制到 $ETC_DIR，init 脚本将直接使用 frps/frpc 并读取 /etc/frp/*.toml"
+  fi
+
+  echoinfo "/etc/frp 已重建并仅包含所选的配置文件与可执行文件（如适用）"
+}
+
+  echoinfo "/etc/frp 已重建并仅包含所选的配置文件与可执行文件（如适用）"
 }
 
 # ---------- systemd/unit & openwrt init 创建 ----------
@@ -260,8 +266,10 @@ EOF
 create_openwrt_init_scripts() {
   echoinfo "创建 OpenWrt init 脚本（procd 版本，若系统无 procd 则回退至兼容脚本）..."
 
+  # 重要：我们不再将可执行文件复制到 /etc/frp，避免占用路由器存储空间。
+  # init 脚本将直接调用系统 PATH 中的 frps/frpc（例如 /usr/bin/frps），并使用 /etc/frp 下的配置文件。
+
   if command -v procd >/dev/null 2>&1 || [ -e /sbin/procd ]; then
-    # frps - procd 脚本
     cat >/etc/init.d/frps <<'EOF'
 #!/bin/sh /etc/rc.common
 # frps - frp 服务端 (procd)
@@ -279,12 +287,12 @@ start() {
   config_get_bool enabled "main" "enabled" "0"
   [ "$enabled" -eq 1 ] || return 0
 
+  # 使用系统可执行路径调用二进制并指定配置文件路径
   config_get conf "main" "frps_conf" "/etc/frp/frps.toml"
   config_get log_stderr "main" "log_stderr" "/var/log/frps.log"
 
   procd_open_instance
-  procd_set_param command /usr/bin/frps -c "$conf"
-  procd_set_param file "$conf"
+  procd_set_param command /bin/sh -c 'frps -c /etc/frp/frps.toml'
   procd_set_param stderr "$log_stderr"
   procd_set_param limits core="unlimited"
   procd_set_param limits nofile="1000000 1000000"
@@ -303,7 +311,6 @@ EOF
     chmod +x /etc/init.d/frps || true
     echoinfo "/etc/init.d/frps (procd) 已生成"
 
-    # frpc - procd 脚本
     cat >/etc/init.d/frpc <<'EOF'
 #!/bin/sh /etc/rc.common
 # frpc - frp 客户端 (procd)
@@ -325,8 +332,7 @@ start() {
   config_get log_stderr "client" "log_stderr" "/var/log/frpc.log"
 
   procd_open_instance
-  procd_set_param command /usr/bin/frpc -c "$conf"
-  procd_set_param file "$conf"
+  procd_set_param command /bin/sh -c 'frpc -c /etc/frp/frpc.toml'
   procd_set_param stderr "$log_stderr"
   procd_set_param limits core="unlimited"
   procd_set_param limits nofile="1000000 1000000"
@@ -346,23 +352,24 @@ EOF
     echoinfo "/etc/init.d/frpc (procd) 已生成"
 
   else
-    # 回退：传统 start-stop-daemon 脚本
+    # 回退：兼容脚本，使用系统可执行名并以 /etc/frp 下的配置文件启动
     cat >/etc/init.d/frps <<'EOF'
 #!/bin/sh /etc/rc.common
 # frps - fallback init
 START=99
 STOP=10
-PROG=/usr/bin/frps
+PROG=frps
 CONF=/etc/frp/frps.toml
 
 start() {
-  [ -x "$PROG" ] || return 1
+  command -v $PROG >/dev/null 2>&1 || return 1
   [ -f "$CONF" ] || return 1
-  start-stop-daemon -S -b -x "$PROG" -- -c "$CONF"
+  # 以系统可执行路径 frps 启动并指定配置文件路径
+  sh -c 'frps -c /etc/frp/frps.toml 2>>/var/log/frps.log &' || true
 }
 
 stop() {
-  start-stop-daemon -K -x "$PROG"
+  pkill -f "frps -c /etc/frp/frps.toml" 2>/dev/null || true
 }
 EOF
     chmod +x /etc/init.d/frps || true
@@ -373,17 +380,17 @@ EOF
 # frpc - fallback init
 START=99
 STOP=10
-PROG=/usr/bin/frpc
+PROG=frpc
 CONF=/etc/frp/frpc.toml
 
 start() {
-  [ -x "$PROG" ] || return 1
+  command -v $PROG >/dev/null 2>&1 || return 1
   [ -f "$CONF" ] || return 1
-  start-stop-daemon -S -b -x "$PROG" -- -c "$CONF"
+  sh -c 'frpc -c /etc/frp/frpc.toml 2>>/var/log/frpc.log &' || true
 }
 
 stop() {
-  start-stop-daemon -K -x "$PROG"
+  pkill -f "frpc -c /etc/frp/frpc.toml" 2>/dev/null || true
 }
 EOF
     chmod +x /etc/init.d/frpc || true
@@ -391,6 +398,11 @@ EOF
   fi
 
   echowarn "init 脚本已生成（未启用/未启动）。启用示例："
+  echoinfo "  /etc/init.d/frps enable"
+  echoinfo "  /etc/init.d/frps start"
+  echoinfo "  /etc/init.d/frpc enable"
+  echoinfo "  /etc/init.d/frpc start"
+}
   echoinfo "  /etc/init.d/frps enable"
   echoinfo "  /etc/init.d/frps start"
   echoinfo "  /etc/init.d/frpc enable"
@@ -437,23 +449,41 @@ install_flow() {
     if [ "$ans" = "yes" ]; then
       [ -n "${ASSET_URL:-}" ] || { echoerr "未获取下载地址"; return 1; }
       download_and_extract || return 1
-      install_bins_only_from_extracted || return 1
+      # 仅更新已存在的二进制
+      sel="none"
+      [ "$have_frpc" = "yes" ] && sel="frpc"
+      [ "$have_frps" = "yes" ] && sel="frps"
+      if [ "$have_frpc" = "yes" ] && [ "$have_frps" = "yes" ]; then sel="all"; fi
+      install_from_extracted "$sel" || return 1
       echoinfo "二进制更新完成。请按需重启服务。"
       deploy_self
       return 0
     fi
   fi
 
+  # 如果任一缺失，则提示用户选择安装目标（客户端/服务端/全部）
   if [ "$have_frps" = "no" ] || [ "$have_frpc" = "no" ]; then
-    printf "\n检测到缺少 frps 或 frpc，将进行完整安装（会重建 /etc/frp，仅保留 frpc.toml 与 frps.toml）\n"
-    printf "继续吗？(yes/[no]) "; read cont
-    [ "$cont" = "yes" ] || { echoinfo "已取消安装"; return 0; }
+    printf "\n检测到缺少 frps 或 frpc，将进行安装。请选择要安装的目标：\n"
+    printf "  1) 安装 frps（服务端）\n"
+    printf "  2) 安装 frpc（客户端）\n"
+    printf "  3) 全部（frps + frpc）\n"
+    printf "  0) 取消\n"
+    printf "请选择: "; read choice
+    case "$choice" in
+      1) INSTALL_TARGET="frps" ;;
+      2) INSTALL_TARGET="frpc" ;;
+      3) INSTALL_TARGET="all" ;;
+      0) echoinfo "已取消安装"; return 0 ;;
+      *) echowarn "无效选择"; return 0 ;;
+    esac
+
     [ -n "${ASSET_URL:-}" ] || { echoerr "未获取下载地址"; return 1; }
     download_and_extract || return 1
-    install_full_flow_from_extracted || return 1
+    install_from_extracted "$INSTALL_TARGET" || return 1
+
     if [ "$SYSTEM" = "debian" ]; then create_systemd_unit_files; else create_openwrt_init_scripts; fi
     deploy_self
-    echoinfo "完整安装完成。请编辑 /etc/frp/*.toml 后手动启用并启动服务。"
+    echoinfo "安装完成。请根据需要编辑 /etc/frp/*.toml 后启用并启动服务。"
     return 0
   fi
 
@@ -467,13 +497,13 @@ service_manage() {
   name="$1"
   while :; do
     clear
-    printf "%b========================================%b\n" "$C_HDR" "$C_RST"
-    printf "%b  FRP 服务管理：%s  %b\n" "$C_PROMPT" "$name" "$C_RST"
-    printf "%b========================================%b\n\n" "$C_HDR" "$C_RST"
+    printf "%b+----------------------------------------------+%b\n" "$C_HDR" "$C_RST"
+    printf "%b|   FRP 服务管理： %s\n" "$C_PROMPT" "$name"
+    printf "%b+----------------------------------------------+%b\n\n" "$C_HDR" "$C_RST"
 
-    printf "  %-4s %-12s  %-4s %-12s\n" "1)" "启动"   "2)" "停止"
-    printf "  %-4s %-12s  %-4s %-12s\n" "3)" "重启"   "4)" "状态"
-    printf "  %-4s %-12s  %-4s %-12s\n\n" "5)" "查看日志" "0)" "返回"
+    printf "  %-4s %-14s  %-4s %-14s\n" "1)" "启动"   "2)" "停止"
+    printf "  %-4s %-14s  %-4s %-14s\n" "3)" "重启"   "4)" "状态"
+    printf "  %-4s %-14s  %-4s %-14s\n\n" "5)" "查看日志" "0)" "返回"
 
     printf "请选择: "; read op
     case "$op" in
@@ -503,12 +533,12 @@ service_manage() {
 manage_menu() {
   while :; do
     clear
-    printf "%b========================================%b\n" "$C_HDR" "$C_RST"
-    printf "%b  FRP 管理菜单  %b\n" "$C_PROMPT" "$C_RST"
-    printf "%b========================================%b\n\n" "$C_HDR" "$C_RST"
+    printf "%b+----------------------------------------------+%b\n" "$C_HDR" "$C_RST"
+    printf "%b|   FRP 管理菜单\n" "$C_PROMPT"
+    printf "%b+----------------------------------------------+%b\n\n" "$C_HDR" "$C_RST"
 
-    printf "  %-4s %-20s  %-4s %-20s\n" "1)" "管理 frps (服务端)" "2)" "管理 frpc (客户端)"
-    printf "\n  %-4s %-20s\n\n" "0)" "返回主菜单"
+    printf "  %-4s %-22s  %-4s %-22s\n" "1)" "管理 frps (服务端)" "2)" "管理 frpc (客户端)"
+    printf "\n  %-4s %-22s\n\n" "0)" "返回主菜单"
 
     printf "请选择: "; read sel
     case "$sel" in
@@ -526,6 +556,7 @@ uninstall_all() {
   printf "确认卸载并删除所有 frp 文件？（输入 yes 确认）: "; read confirm
   [ "$confirm" = "yes" ] || { echoinfo "已取消卸载"; return 0; }
 
+  detect_system || true
   if [ "$SYSTEM" = "debian" ]; then
     systemctl stop frps.service 2>/dev/null || true
     systemctl stop frpc.service 2>/dev/null || true
@@ -556,13 +587,13 @@ uninstall_all() {
 main_menu() {
   while :; do
     clear
-    printf "%b========================================%b\n" "$C_HDR" "$C_RST"
+    printf "%b==============================================%b\n" "$C_HDR" "$C_RST"
     printf "%b  frp 安装 / 管理 / 卸载  %b\n" "$C_PROMPT" "$C_RST"
-    printf "%b========================================%b\n\n" "$C_HDR" "$C_RST"
+    printf "%b==============================================%b\n\n" "$C_HDR" "$C_RST"
 
-    printf "  %-4s %-30s  %-4s %-30s\n" "1)" "安装 / 升级 frp" "2)" "管理 frp (启动/停止/重启/日志)"
-    printf "\n  %-4s %-30s\n\n" "3)" "卸载 frp"
-    printf "  %-4s %-30s\n\n" "0)" "退出"
+    printf "  %-4s %-36s  %-4s %-36s\n" "1)" "安装 / 升级 frp (选择 客户端/服务端/全部)" "2)" "管理 frp (启动/停止/重启/日志)"
+    printf "\n  %-4s %-36s\n\n" "3)" "卸载 frp"
+    printf "  %-4s %-36s\n\n" "0)" "退出"
 
     printf "请选择: "; read opt
     case "$opt" in
