@@ -6,12 +6,10 @@
 # 用法: sudo ./eximg.sh <镜像文件名> <目标大小GB>
 # =========================================================
 
-# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
-# 1. 权限与参数检查
 if [ "$(id -u)" != "0" ]; then
    echo -e "${RED}[Error] 必须使用 sudo 或 root 权限运行！${NC}"
    exit 1
@@ -26,7 +24,6 @@ if [ -z "$INPUT_FILE" ] || [ -z "$TARGET_SIZE_GB" ]; then
     exit 1
 fi
 
-# 2. 依赖检查 (自动安装 gdisk)
 REQUIRED_TOOLS="parted losetup gunzip sgdisk"
 echo -e "${GREEN}[检查环境] 正在检查依赖工具...${NC}"
 
@@ -42,7 +39,6 @@ for tool in $REQUIRED_TOOLS; do
     fi
 done
 
-# 3. 准备工作文件
 WORK_FILE="$INPUT_FILE"
 
 if [[ "$INPUT_FILE" == *.gz ]]; then
@@ -56,11 +52,9 @@ else
     cp "$INPUT_FILE" "$WORK_FILE"
 fi
 
-# 4. 物理扩容
 echo -e "${GREEN}[2/5] 正在扩展文件体积到 ${TARGET_SIZE_GB}GB...${NC}"
 truncate -s "${TARGET_SIZE_GB}G" "$WORK_FILE"
 
-# 5. 挂载 Loop 设备
 echo -e "${GREEN}[3/5] 正在挂载虚拟磁盘...${NC}"
 LOOP_DEV=$(losetup -P -f --show "$WORK_FILE")
 if [ -z "$LOOP_DEV" ]; then
@@ -68,7 +62,6 @@ if [ -z "$LOOP_DEV" ]; then
     exit 1
 fi
 
-# 6. 修复 GPT 表 (使用 sgdisk -e 自动移动备份头，避免交互卡死)
 echo -e "${GREEN}[4/5] 正在修复 GPT 分区表 (sgdisk)...${NC}"
 sgdisk -e "$LOOP_DEV" > /dev/null 2>&1
 if [ $? -ne 0 ]; then
@@ -77,11 +70,9 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# 7. 扩展分区 (将第2分区拉满)
 echo -e "${GREEN}[5/5] 正在扩展第 2 分区...${NC}"
 parted -s "$LOOP_DEV" resizepart 2 100%
 
-# 8. 清理
 losetup -d "$LOOP_DEV"
 
 echo -e "\n======================================================="
