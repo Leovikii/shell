@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>CachyOS 字体渲染测试</title>
+    <style>
+        body {
+            background-color: #1e1e2e;
+            color: #cdd6f4;
+            padding: 40px;
+        }
+        .test-block {
+            margin-bottom: 40px;
+            padding: 20px;
+            background: #313244;
+            border-radius: 8px;
+        }
+        h2 { border-bottom: 1px solid #585b70; padding-bottom: 10px; }
+        .sans { font-family: sans-serif; }
+        .serif { font-family: serif; }
+        .mono { font-family: monospace; }
+        
+        .w-normal { font-weight: 400; }
+        .w-bold { font-weight: 700; }
+        .w-heavy { font-weight: 900; }
+        .italic { font-style: italic; }
+        
+        p { font-size: 20px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+
+    <div class="test-block sans">
+        <h2>无衬线体 (Sans-serif) - 更纱黑体 Sarasa UI SC</h2>
+        <p class="w-normal">常规 (400)：The quick brown fox jumps over the lazy dog. 敏捷的棕色狐狸跳过懒惰的狗。</p>
+        <p class="w-bold">粗体 (700)：The quick brown fox jumps over the lazy dog. 敏捷的棕色狐狸跳过懒惰的狗。</p>
+        <p class="w-normal italic">斜体 (Italic)：The quick brown fox jumps over the lazy dog. 敏捷的棕色狐狸跳过懒惰的狗。</p>
+    </div>
+
+    <div class="test-block serif">
+        <h2>衬线体 (Serif) - 霞鹜文楷 LXGW WenKai</h2>
+        <p class="w-normal">常规 (400)：The quick brown fox jumps over the lazy dog. 敏捷的棕色狐狸跳过懒惰的狗。</p>
+        <p class="w-bold">粗体 (700)：The quick brown fox jumps over the lazy dog. 敏捷的棕色狐狸跳过懒惰的狗。</p>
+    </div>
+
+    <div class="test-block mono">
+        <h2>等宽字体 (Monospace) - 更纱黑体终端版 Sarasa Term SC</h2>
+        <p class="w-normal">常规 (400)：func main() { fmt.Println("Hello, 世界") } // 严格的 2:1 中英对齐</p>
+        <p class="w-bold">粗体 (700)：func main() { fmt.Println("Hello, 世界") } // 严格的 2:1 中英对齐</p>
+        <p class="w-normal italic">斜体 (Italic)：func main() { fmt.Println("Hello, 世界") } // 严格的 2:1 中英对齐</p>
+        <p class="w-normal">| English | 中文对齐测试 |</p>
+        <p class="w-normal">|---------|--------------|</p>
+        <p class="w-normal">| 1234567 | 测试排版效果 |</p>
+    </div>
+
+</body>
+</html>
