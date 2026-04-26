@@ -10,7 +10,7 @@ install_fonts() {
         echo -e "\033[1;31m未找到 paru 或 yay，请先安装其中之一。\033[0m"
         return 1
     fi
-    $helper -S --needed ttf-sarasa-gothic ttf-lxgw-wenkai
+    $helper -S --needed ttf-sarasa-gothic
     echo -e "\033[1;32m字体安装尝试完成。建议立即选择 [2] 应用优化配置。\033[0m"
 }
 
@@ -18,10 +18,10 @@ apply_config() {
     echo -e "\033[1;34m正在检测字体安装情况...\033[0m"
     local missing=0
     fc-list :family | grep -qi "Sarasa UI SC" || missing=1
-    fc-list :family | grep -qi "LXGW WenKai" || missing=1
+    fc-list :family | grep -qi "Noto Serif CJK SC" || missing=1
     
     if [ $missing -eq 1 ]; then
-        echo -e "\033[1;31m错误：未检测到更纱黑体或霞鹜文楷。请先执行选项 [1] 安装字体。\033[0m"
+        echo -e "\033[1;31m错误：未检测到更纱黑体或思源宋体。请确保系统已包含 Noto CJK 并执行 [1] 安装更纱黑体。\033[0m"
         return 1
     fi
 
@@ -65,8 +65,10 @@ apply_config() {
   <alias>
     <family>serif</family>
     <prefer>
-      <family>LXGW WenKai</family>
-      <family>Sarasa UI SC</family>
+      <family>Noto Serif CJK SC</family>
+      <family>Noto Serif CJK TC</family>
+      <family>Noto Serif CJK JP</family>
+      <family>Noto Serif CJK KR</family>
     </prefer>
   </alias>
   <alias>
@@ -104,14 +106,17 @@ apply_config() {
   <match target="pattern"><test name="family"><string>SimHei</string></test><edit name="family" mode="assign" binding="strong"><string>Sarasa UI SC</string></edit></match>
   <match target="pattern"><test name="family"><string>黑体</string></test><edit name="family" mode="assign" binding="strong"><string>Sarasa UI SC</string></edit></match>
   <match target="pattern"><test name="family"><string>PingFang SC</string></test><edit name="family" mode="assign" binding="strong"><string>Sarasa UI SC</string></edit></match>
-  <match target="pattern"><test name="family"><string>Times New Roman</string></test><edit name="family" mode="assign" binding="strong"><string>LXGW WenKai</string></edit></match>
-  <match target="pattern"><test name="family" compare="contains"><string>SimSun</string></test><edit name="family" mode="assign" binding="strong"><string>LXGW WenKai</string></edit></match>
-  <match target="pattern"><test name="family"><string>宋体</string></test><edit name="family" mode="assign" binding="strong"><string>LXGW WenKai</string></edit></match>
-  <match target="pattern"><test name="family"><string>FangSong</string></test><edit name="family" mode="assign" binding="strong"><string>LXGW WenKai</string></edit></match>
-  <match target="pattern"><test name="family"><string>仿宋</string></test><edit name="family" mode="assign" binding="strong"><string>LXGW WenKai</string></edit></match>
+
+  <match target="pattern"><test name="family"><string>Times New Roman</string></test><edit name="family" mode="assign" binding="strong"><string>Noto Serif CJK SC</string></edit></match>
+  <match target="pattern"><test name="family" compare="contains"><string>SimSun</string></test><edit name="family" mode="assign" binding="strong"><string>Noto Serif CJK SC</string></edit></match>
+  <match target="pattern"><test name="family"><string>宋体</string></test><edit name="family" mode="assign" binding="strong"><string>Noto Serif CJK SC</string></edit></match>
+  <match target="pattern"><test name="family"><string>FangSong</string></test><edit name="family" mode="assign" binding="strong"><string>Noto Serif CJK SC</string></edit></match>
+  <match target="pattern"><test name="family"><string>仿宋</string></test><edit name="family" mode="assign" binding="strong"><string>Noto Serif CJK SC</string></edit></match>
+
   <match target="pattern"><test name="family"><string>Courier New</string></test><edit name="family" mode="assign" binding="strong"><string>Sarasa Term SC</string></edit></match>
   <match target="pattern"><test name="family"><string>Consolas</string></test><edit name="family" mode="assign" binding="strong"><string>Sarasa Term SC</string></edit></match>
   <match target="pattern"><test name="family"><string>Source Code Pro</string></test><edit name="family" mode="assign" binding="strong"><string>Sarasa Term SC</string></edit></match>
+
 </fontconfig>
 EOF
 
@@ -143,9 +148,9 @@ EOF
 while true; do
     clear
     echo -e "\033[1;36m=========================================\033[0m"
-    echo -e "\033[1;32m         Font Optimizer v0.0.5           \033[0m"
+    echo -e "\033[1;32m         Font Optimizer v0.0.6           \033[0m"
     echo -e "\033[1;36m=========================================\033[0m"
-    echo -e " \033[1;33m[1]\033[0m 安装字体 (Sarasa & LXGW)           "
+    echo -e " \033[1;33m[1]\033[0m 安装字体 (仅 Sarasa Gothic)       "
     echo -e " \033[1;33m[2]\033[0m 应用 Fontconfig & KDE 优化配置      "
     echo -e " \033[1;33m[0]\033[0m 退出脚本                           "
     echo -e "\033[1;36m=========================================\033[0m"
